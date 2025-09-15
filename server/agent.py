@@ -10,10 +10,10 @@ import soundfile as sf
 from agents import Agent, function_tool
 from agents.extensions.handoff_prompt import prompt_with_handoff_instructions
 from agents.voice import (
-    SingleAgentVoiceWorkflow, 
-    VoicePipeline, AudioInput, 
-    VoicePipelineConfig, 
-    STTModelSettings,
+    AudioInput,
+    SingleAgentVoiceWorkflow,
+    VoicePipeline,
+    VoicePipelineConfig,
     TTSModelSettings
 )
 
@@ -33,6 +33,7 @@ vietnamese_agent = Agent(
         "You're speaking to a human, so be polite and concise. Speak in Vietnamese.",
     ),
     model="gpt-4o-mini",
+    tools=[get_weather]
 )
 
 agent = Agent(
@@ -47,17 +48,22 @@ agent = Agent(
 
 
 async def run_agent(audio_data:bytes):
+    """
+    Run agent pipeline in async mode
+    """
     tts_config = TTSModelSettings(voice="sage")
     config = VoicePipelineConfig(tracing_disabled=True, tts_settings=tts_config)
 
     pipeline = VoicePipeline(workflow=SingleAgentVoiceWorkflow(agent), config=config)
-    # buffer = np.zeros(24000 * 3, dtype=np.int16)
-    # if not audio_input:
-    #     
-    #     audio_input = AudioInput(buffer=buffer)
-    # Decode wav → numpy array
-    buffer, sample_rate = sf.read(io.BytesIO(audio_data), dtype="float32")
-    audio_input = AudioInput(buffer=buffer, frame_rate=sample_rate)
+
+    if not audio_data:
+        buffer = np.zeros(24000 * 3, dtype=np.int16)
+        audio_input = AudioInput(buffer=buffer)
+    else:
+        # Decode wav to numpy array
+        buffer, sample_rate = sf.read(io.BytesIO(audio_data), dtype="float32")
+        audio_input = AudioInput(buffer=buffer, frame_rate=sample_rate)
+
     result = await pipeline.run(audio_input)
 
     # Create an audio player using `sounddevice`
