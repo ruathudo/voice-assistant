@@ -1,13 +1,7 @@
-# openai_services.py
-"""
-Integrates OpenAI APIs for STT (Whisper), LLM, and TTS.
-"""
-
-
 import os
 import requests
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "your-openai-key")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "no")
 OPENAI_API_URL = "https://api.openai.com/v1"
 
 def speech_to_text(audio_bytes: bytes) -> str:
@@ -18,7 +12,7 @@ def speech_to_text(audio_bytes: bytes) -> str:
     headers = {"Authorization": f"Bearer {OPENAI_API_KEY}"}
     files = {"file": ("audio.wav", audio_bytes, "audio/wav")}
     data = {"model": "whisper-1"}
-    response = requests.post(url, headers=headers, files=files, data=data)
+    response = requests.post(url, headers=headers, files=files, data=data, timeout=10)
     if response.status_code == 200:
         return response.json().get("text", "")
     return ""
@@ -35,7 +29,7 @@ def generate_text(prompt: str) -> str:
         "messages": [{"role": "user", "content": prompt}],
         "stream": False
     }
-    response = requests.post(url, headers=headers, json=data)
+    response = requests.post(url, headers=headers, json=data, timeout=10)
     if response.status_code == 200:
         choices = response.json().get("choices", [])
         if choices:
@@ -54,7 +48,7 @@ def text_to_speech(text: str) -> bytes:
         "input": text,
         "voice": "alloy"
     }
-    response = requests.post(url, headers=headers, json=data)
+    response = requests.post(url, headers=headers, json=data, timeout=10)
     if response.status_code == 200:
         return response.content
     return b""
