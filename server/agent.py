@@ -4,7 +4,6 @@ Handling agent logic and workflow
 import io
 import random
 import numpy as np
-import sounddevice as sd
 import soundfile as sf
 
 from agents import Agent, function_tool
@@ -56,21 +55,24 @@ async def run_agent(audio_data:bytes):
 
     pipeline = VoicePipeline(workflow=SingleAgentVoiceWorkflow(agent), config=config)
 
-    if not audio_data:
+    if audio_data is None or audio_data.size == 0:
         buffer = np.zeros(24000 * 3, dtype=np.int16)
         audio_input = AudioInput(buffer=buffer)
     else:
         # Decode wav to numpy array
-        buffer, sample_rate = sf.read(io.BytesIO(audio_data), dtype="float32")
-        audio_input = AudioInput(buffer=buffer, frame_rate=sample_rate)
+        # buffer, sample_rate = sf.read(io.BytesIO(audio_data), dtype="float32")
+        audio_input = AudioInput(buffer=audio_data, frame_rate=16000)
 
     result = await pipeline.run(audio_input)
 
     # Create an audio player using `sounddevice`
-    player = sd.OutputStream(samplerate=24000, channels=1, dtype=np.int16)
-    player.start()
+    # player = sd.OutputStream(samplerate=24000, channels=1, dtype=np.int16)
+    # player.start()
 
     # Play the audio stream as it comes in
     async for event in result.stream():
         if event.type == "voice_stream_event_audio":
-            player.write(event.data)
+            print(event.data.dtype)
+            pcm_bytes = event.data.astype(np.int16).tobytes()
+            yield pcm_bytes
+            # player.write(event.data)

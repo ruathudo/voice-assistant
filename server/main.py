@@ -1,11 +1,17 @@
 import os
 import logging
-import io
+import base64
+import json
+
+import soundfile as sf
+import numpy as np
 
 
 from fastapi import FastAPI, UploadFile, WebSocket, WebSocketDisconnect, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+
+from agents.voice import AudioInput
 
 # Import backend modules
 # from .audio_utils import save_audio_file
@@ -13,7 +19,7 @@ from fastapi.responses import StreamingResponse
 # from .agent import VoiceAssistantAgent
 # from .db import SessionLocal, Conversation
 # from .schemas import AudioUploadResponse, ChatHistoryResponse, ChatHistoryItem
-# from .websocket_manager import WebSocketManager
+
 from .agent import run_agent
 
 
@@ -27,7 +33,6 @@ logging.basicConfig(level=LOGGING_LEVEL)
 
 # Initialize agent and websocket manager
 # agent = VoiceAssistantAgent()
-# ws_manager = WebSocketManager()
 
 # CORS middleware
 app.add_middleware(
@@ -45,7 +50,7 @@ async def ping():
 
 
 @app.post("/voice")
-async def voice_chat(file: UploadFile = File(...)):
+async def voice_chat(file: UploadFile = File(media_type="audio/wav")) -> StreamingResponse:
     """
     Receive a recorded wav file, pass it to the VoicePipeline, 
     and return the agent’s audio response as streaming output.
@@ -57,8 +62,52 @@ async def voice_chat(file: UploadFile = File(...)):
     # Read file into memory
     wav_bytes = await file.read()
 
-    await run_agent(wav_bytes)
-    return {"status": "ok"}
+    audio_generator = run_agent(wav_bytes)
+    return StreamingResponse(audio_generator, media_type="audio/wav")
+
+@app.websocket("/ws/voice")
+async def websocket_voice(ws: WebSocket):
+    await ws.accept()
+    buffer = []
+
+    try:
+        while True:
+            msg = await ws.receive_bytes()
+
+            if msg == b"__END__":
+                # Finalize full input once client signals end of utterance
+                if not buffer:
+                    await ws.send_text(json.dumps({"type": "error", "msg": "no audio received"}))
+                    continue
+
+                full_pcm = np.concatenate(buffer).astype(np.float32)
+                # audio_input = AudioInput(buffer=full_pcm, frame_rate=16000)
+
+                # Save to .wav for debugging
+                sf.write("user_input.wav", full_pcm, 16000, subtype="PCM_16")
+
+                await ws.send_text(json.dumps({
+                    "type": "text",
+                    "data": "Received audio input, processing..."
+                }))
+
+                async for chunk in run_agent(full_pcm):
+                    await ws.send_bytes(chunk)
+
+                await ws.send_text(json.dumps({
+                    "type": "end",
+                    "data": "Response complete."
+                }))
+
+                # Reset buffer for next utterance
+                # buffer.clear()
+            else:
+                # Accumulate PCM float32 chunks
+                pcm = np.frombuffer(msg, dtype=np.float32)
+                buffer.append(pcm)
+
+    except WebSocketDisconnect:
+        print("Client disconnected")
 
 # Upload audio and start conversation
 # @app.post("/api/audio", response_model=AudioUploadResponse)
