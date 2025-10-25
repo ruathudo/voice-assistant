@@ -1,131 +1,203 @@
-#include <Arduino.h>
-// #include <Adafruit_NeoPixel.h>
 #include <WiFi.h>
-// Include I2S driver
-#include <driver/i2s.h>
-#define PIN_WS2812B 48
-#define NUM_PIXELS 1
-#define LED_BUILTIN 2
+#include <WebSocketsClient.h>
+#include <AudioTools.h>
+#include <AudioTools/Communication/WebSocketOutput.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+// =================== WiFi Config ===================
+const char* ssid = "YOUR_WIFI";
+const char* password = "YOUR_PASS";
+const char* ws_host = "192.168.1.100";  // your websocket host
+
+// =================== Touch Config ===================
+#define TOUCH_PIN T1   // adjust if needed (T1-T14)
+#define TOUCH_THRESHOLD 40
+
+// =================== OLED Config ===================
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+
+// =================== Audio Config ===================
+#define MIC_BCLK  21
+#define MIC_LRCLK 20
+#define MIC_DOUT  19
+
+#define SPK_BCLK  40
+#define SPK_LRCLK 39
+#define SPK_DIN   38
+
+#define SAMPLE_RATE 16000
+#define BLOCK_SIZE 1024
+#define BUFFER_BLOCKS 8
+
+// =================== Globals ===================
+I2SStream i2sMic(I2S_NUM_0);
+I2SStream i2sSpk(I2S_NUM_1);
 
 
- 
-// Connections to INMP441 I2S microphone
-#define I2S_SD 19
-#define I2S_WS 20
-#define I2S_SCK 21
- 
-// Use I2S Processor 0
-#define I2S_PORT I2S_NUM_0
- 
-// Define input buffer length
-#define bufferLen 64
+WebSocketsClient webSocket;
+WebSocketOutput out(webSocket);
+StreamCopy copier(out, i2sMic); // copies mic to websocket
 
-// Adafruit_NeoPixel ws2812b(NUM_PIXELS, PIN_WS2812B, NEO_GRB + NEO_KHZ800);
+// For playback
+enum PlaybackState { IDLE, PLAYING, FINISHING };
+volatile PlaybackState playbackState = IDLE;
 
+volatile bool recording = false;
+volatile bool lastTouch = false;
 
-  
-const char *ssid_Router     = "hehe"; //Enter the router name
-const char *password_Router = "vn30041975"; //Enter the router password
-int16_t sBuffer[bufferLen];
-
-void i2s_install() {
-  // Set up I2S Processor configuration
-  const i2s_config_t i2s_config = {
-    .mode = i2s_mode_t(I2S_MODE_MASTER | I2S_MODE_RX),
-    .sample_rate = 44100,
-    .bits_per_sample = i2s_bits_per_sample_t(16),
-    .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
-    .communication_format = i2s_comm_format_t(I2S_COMM_FORMAT_STAND_I2S),
-    .intr_alloc_flags = 0,
-    .dma_buf_count = 8,
-    .dma_buf_len = bufferLen,
-    .use_apll = false
-  };
- 
-  i2s_driver_install(I2S_PORT, &i2s_config, 0, NULL);
+// =================== OLED Functions ===================
+void oledMessage(const char* msg) {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 28);
+  display.println(msg);
+  display.display();
 }
- 
-void i2s_setpin() {
-  // Set I2S pin configuration
-  const i2s_pin_config_t pin_config = {
-    .bck_io_num = I2S_SCK,
-    .ws_io_num = I2S_WS,
-    .data_out_num = -1,
-    .data_in_num = I2S_SD
-  };
- 
-  i2s_set_pin(I2S_PORT, &pin_config);
-}
- 
 
-void setup()
-{
-  // put your setup code here, to run once:
+// =================== WebSocket Event ===================
+void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
+  switch (type) {
+    case WStype_DISCONNECTED:
+      Serial.println("[WSc] Disconnected!");
+      oledMessage("WS Disconnected");
+      playbackState = IDLE;
+      break;
+    case WStype_CONNECTED:
+      Serial.println("[WSc] Connected!");
+      oledMessage("WS Connected");
+      break;
+    case WStype_TEXT:
+      Serial.printf("[WSc] get text: %s\n", payload);
+      if (strcmp((char*)payload, "__PLAY_END__") == 0) {
+        if (playbackState == PLAYING) {
+          playbackState = FINISHING;
+          Serial.println("Playback finishing...");
+        }
+      }
+      break;
+    case WStype_BIN:
+      if (playbackState == IDLE) {
+        playbackState = PLAYING;
+        oledMessage("Playing...");
+        Serial.println("Playback started.");
+      }
+      if (playbackState == PLAYING) {
+        i2sSpk.write(payload, length);
+      }
+      break;
+    case WStype_ERROR:
+      Serial.println("[WSc] Error!");
+      oledMessage("WS Error!");
+      break;
+  }
+}
+
+// =================== Tasks ===================
+// No tasks needed for this implementation
+
+
+// =================== Setup ===================
+void setup() {
   Serial.begin(115200);
-  delay(2000);
-  Serial.println("Setup start");
-  WiFi.begin(ssid_Router, password_Router);
-  Serial.println(String("Connecting to ")+ssid_Router);
-  while (WiFi.status() != WL_CONNECTED){
-    delay(500);
+
+  // ---- OLED ----
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("SSD1306 not found!");
+    while (true);
+  }
+  oledMessage("Starting...");
+
+  // ---- WiFi ----
+  oledMessage("Connecting WiFi...");
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(300);
     Serial.print(".");
   }
-  Serial.println("\nConnected, IP address: ");
-  Serial.println(WiFi.localIP());
-  Serial.println("Setup End");
-  pinMode(LED_BUILTIN, OUTPUT);
-  // ws2812b.begin();  // initialize WS2812B strip object (REQUIRED)
+  Serial.println();
+  oledMessage("WiFi Connected");
 
-  // Set up I2S
-  i2s_install();
-  i2s_setpin();
-  i2s_start(I2S_PORT);
-  delay(500);
+  // ---- I2S Mic ----
+  auto micCfg = i2sMic.defaultConfig(RX_MODE);
+  micCfg.sample_rate = SAMPLE_RATE;
+  micCfg.bits_per_sample = 16;
+  micCfg.channels = 1;
+  micCfg.pin_bck = MIC_BCLK;
+  micCfg.pin_ws = MIC_LRCLK;
+  micCfg.pin_data = MIC_DOUT;
+  i2sMic.begin(micCfg);
+
+  // ---- I2S Speaker ----
+  auto spkCfg = i2sSpk.defaultConfig(TX_MODE);
+  spkCfg.sample_rate = SAMPLE_RATE;
+  spkCfg.bits_per_sample = 16;
+  spkCfg.channels = 1;
+  spkCfg.pin_bck = SPK_BCLK;
+  spkCfg.pin_ws = SPK_LRCLK;
+  spkCfg.pin_data = SPK_DIN;
+  i2sSpk.begin(spkCfg);
+
+  // ---- WebSocket ----
+  webSocket.begin(ws_host, 8000, "/ws");
+  webSocket.onEvent(webSocketEvent);
+  webSocket.setReconnectInterval(5000);
+
+  // ---- Tasks ----
+  // No tasks needed for this implementation
+
+  Serial.println("Setup complete.");
+  oledMessage("Ready - Touch to Talk");
 }
 
-void loop()
-{
-  // Serial.println("Hello world 2.");
-  // ws2812b.clear();  // set all pixel colors to 'off'. It only takes effect if pixels.show() is called
-  // // put your main code here, to run repeatedly:
-  // ws2812b.setPixelColor(0, ws2812b.Color(0, 255, 0));  // it only takes effect if pixels.show() is called
-  // ws2812b.show();                                          // update to the WS2812B Led Strip
-  // delay(1000);  // 500ms pause between each pixel
-  // digitalWrite(LED_BUILTIN, HIGH);
-  // Serial.println("Hello world 3.");
-  // delay(1000);     // 2 seconds off time
-  // digitalWrite(LED_BUILTIN, LOW);
+// =================== Main Loop ===================
+void loop() {
+  webSocket.loop();
 
-    // False print statements to "lock range" on serial plotter display
-  // Change rangelimit value to adjust "sensitivity"
-  int rangelimit = 3000;
-  Serial.print(rangelimit * -1);
-  Serial.print(" ");
-  Serial.print(rangelimit);
-  Serial.print(" ");
- 
-  // Get I2S data and place in data buffer
-  size_t bytesIn = 0;
-  esp_err_t result = i2s_read(I2S_PORT, &sBuffer, bufferLen, &bytesIn, portMAX_DELAY);
- 
-  if (result == ESP_OK)
-  {
-    // Read I2S data buffer
-    int16_t samples_read = bytesIn / 8;
-    if (samples_read > 0) {
-      float mean = 0;
-      for (int16_t i = 0; i < samples_read; ++i) {
-        mean += (sBuffer[i]);
+  // Recording logic is disabled during playback
+  if (playbackState == IDLE) {
+    bool touched = touchRead(TOUCH_PIN) < TOUCH_THRESHOLD;
+
+    // RISING EDGE: Start recording
+    if (touched && !lastTouch) {
+      if (webSocket.isConnected()) {
+        recording = true;
+        oledMessage("Recording...");
+        Serial.println("Recording started");
+      } else {
+        oledMessage("Not Connected");
       }
- 
-      // Average the data reading
-      mean /= samples_read;
- 
-      // Print to serial plotter
-      Serial.println(mean);
     }
+
+    // FALLING EDGE: Stop recording
+    if (!touched && lastTouch) {
+      if (recording) {
+        webSocket.sendTXT("__END__");
+        Serial.println("Recording stopped. Sent __END__");
+        recording = false;
+      }
+      oledMessage("Ready - Touch to Talk");
+    }
+    lastTouch = touched;
+  } else {
+    // Reset recording state if we are playing
+    recording = false;
+    lastTouch = false;
   }
 
-  delay(5000);
-  i2s_stop(I2S_PORT);
+  // If we are in a recording state, copy data
+  if (recording) {
+    copier.copy();
+  }
+
+  // If playback is finishing, wait for i2s buffer to be empty then go to idle
+  if (playbackState == FINISHING) {
+    i2sSpk.flush();
+    playbackState = IDLE;
+    oledMessage("Ready - Touch to Talk");
+    Serial.println("Playback finished.");
+  }
 }

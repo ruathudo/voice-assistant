@@ -10,3 +10,4 @@ wheels/
 .venv
 .env
 esp32/.vscode
+esp32/src/config.h
