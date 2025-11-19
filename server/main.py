@@ -65,7 +65,7 @@ async def voice_chat(file: UploadFile = File(media_type="audio/wav")) -> Streami
     audio_generator = run_agent(wav_bytes)
     return StreamingResponse(audio_generator, media_type="audio/wav")
 
-@app.websocket("/ws/voice")
+@app.websocket("/ws")
 async def websocket_voice(ws: WebSocket):
     await ws.accept()
     buffer = []
@@ -80,9 +80,7 @@ async def websocket_voice(ws: WebSocket):
                     await ws.send_text(json.dumps({"type": "error", "msg": "no audio received"}))
                     continue
 
-                full_pcm = np.concatenate(buffer).astype(np.float32)
-                # audio_input = AudioInput(buffer=full_pcm, frame_rate=16000)
-
+                full_pcm = np.concatenate(buffer)
                 # Save to .wav for debugging
                 sf.write("user_input.wav", full_pcm, 16000, subtype="PCM_16")
 
@@ -100,10 +98,12 @@ async def websocket_voice(ws: WebSocket):
                 }))
 
                 # Reset buffer for next utterance
-                # buffer.clear()
+                buffer.clear()
             else:
-                # Accumulate PCM float32 chunks
-                pcm = np.frombuffer(msg, dtype=np.float32)
+                # Client sends 16-bit signed integers. We convert to float32
+                # and normalize to the [-1.0, 1.0] range.
+                pcm_int16 = np.frombuffer(msg, dtype=np.int16)
+                pcm = pcm_int16.astype(np.float32) / 32768.0
                 buffer.append(pcm)
 
     except WebSocketDisconnect:

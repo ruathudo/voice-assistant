@@ -72,7 +72,7 @@ async def run_agent(audio_data:bytes):
     # Play the audio stream as it comes in
     async for event in result.stream():
         if event.type == "voice_stream_event_audio":
-            print(event.data.dtype)
+            # print(event.data.dtype)
             pcm_bytes = event.data.astype(np.int16).tobytes()
             yield pcm_bytes
             # player.write(event.data)

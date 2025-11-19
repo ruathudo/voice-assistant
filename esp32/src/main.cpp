@@ -6,13 +6,17 @@
 #include <Adafruit_SSD1306.h>
 
 // =================== WiFi Config ===================
-const char* ssid = "YOUR_WIFI";
-const char* password = "YOUR_PASS";
-const char* ws_host = "192.168.1.100";  // your websocket host
+const char* ssid = "4534";
+const char* password = "5455";
+const char* ws_host = "192.168.10.162";  // your websocket host
+
+// =================== I2C Config ===================
+#define SDA_PIN 39
+#define SCL_PIN 38
 
 // =================== Touch Config ===================
-#define TOUCH_PIN T1   // adjust if needed (T1-T14)
-#define TOUCH_THRESHOLD 40
+#define TOUCH_PIN T14   // adjust if needed (T1-T14)
+#define TOUCH_THRESHOLD 50000 // Value is higher when touched
 
 // =================== OLED Config ===================
 #define SCREEN_WIDTH 128
@@ -20,13 +24,13 @@ const char* ws_host = "192.168.1.100";  // your websocket host
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
 // =================== Audio Config ===================
-#define MIC_BCLK  21
-#define MIC_LRCLK 20
-#define MIC_DOUT  19
+#define MIC_BCLK  40
+#define MIC_LRCLK 41
+#define MIC_DOUT  42
 
-#define SPK_BCLK  40
-#define SPK_LRCLK 39
-#define SPK_DIN   38
+#define SPK_BCLK  19
+#define SPK_LRCLK 20
+#define SPK_DIN   21
 
 #define SAMPLE_RATE 16000
 #define BLOCK_SIZE 1024
@@ -105,6 +109,7 @@ void setup() {
   Serial.begin(115200);
 
   // ---- OLED ----
+  Wire.begin(SDA_PIN, SCL_PIN);
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
     Serial.println("SSD1306 not found!");
     while (true);
@@ -159,10 +164,12 @@ void loop() {
 
   // Recording logic is disabled during playback
   if (playbackState == IDLE) {
-    bool touched = touchRead(TOUCH_PIN) < TOUCH_THRESHOLD;
+    bool touched = touchRead(TOUCH_PIN) > TOUCH_THRESHOLD;
 
     // RISING EDGE: Start recording
     if (touched && !lastTouch) {
+      oledMessage("Touching...");
+      
       if (webSocket.isConnected()) {
         recording = true;
         oledMessage("Recording...");
@@ -175,8 +182,9 @@ void loop() {
     // FALLING EDGE: Stop recording
     if (!touched && lastTouch) {
       if (recording) {
-        webSocket.sendTXT("__END__");
-        Serial.println("Recording stopped. Sent __END__");
+        const char* end_msg = "__END__";
+        webSocket.sendBIN((uint8_t*)end_msg, strlen(end_msg));
+        Serial.println("Recording stopped. Sent __END__ as binary");
         recording = false;
       }
       oledMessage("Ready - Touch to Talk");
@@ -190,6 +198,8 @@ void loop() {
 
   // If we are in a recording state, copy data
   if (recording) {
+    // The I2S signal is very weak. Please double-check the microphone wiring.
+    // (BCLK, LRCLK, DOUT, GND, VCC)
     copier.copy();
   }
 
