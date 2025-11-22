@@ -1,10 +1,9 @@
 """
 Handling agent logic and workflow
 """
-import io
 import random
 import numpy as np
-import soundfile as sf
+# import soundfile as sf
 
 from agents import Agent, function_tool
 from agents.extensions.handoff_prompt import prompt_with_handoff_instructions

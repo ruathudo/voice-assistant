@@ -9,5 +9,8 @@ wheels/
 # Virtual environments
 .venv
 .env
-esp32/.vscode
+
 esp32/src/config.h
+
+.pio
+.vscode

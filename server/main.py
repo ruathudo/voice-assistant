@@ -100,10 +100,22 @@ async def websocket_voice(ws: WebSocket):
                 # Reset buffer for next utterance
                 buffer.clear()
             else:
-                # Client sends 16-bit signed integers. We convert to float32
-                # and normalize to the [-1.0, 1.0] range.
-                pcm_int16 = np.frombuffer(msg, dtype=np.int16)
-                pcm = pcm_int16.astype(np.float32) / 32768.0
+                # Client can send 16-bit signed integers or 32-bit floats.
+                # We try to automatically detect the format and convert to float32.
+                if len(msg) % 4 == 0:
+                    # Potential float32. Let's check the values.
+                    pcm_float32 = np.frombuffer(msg, dtype=np.float32)
+                    if np.max(np.abs(pcm_float32)) <= 1.0:
+                        # Looks like float32 data in [-1.0, 1.0] range.
+                        pcm = pcm_float32
+                    else:
+                        # Values outside range, likely int16.
+                        pcm_int16 = np.frombuffer(msg, dtype=np.int16)
+                        pcm = pcm_int16.astype(np.float32) / 32768.0
+                else:
+                    # Not divisible by 4, so must be int16.
+                    pcm_int16 = np.frombuffer(msg, dtype=np.int16)
+                    pcm = pcm_int16.astype(np.float32) / 32768.0
                 buffer.append(pcm)
 
     except WebSocketDisconnect:
