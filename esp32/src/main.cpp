@@ -6,8 +6,8 @@
 #include <Adafruit_SSD1306.h>
 
 // =================== WiFi Config ===================
-const char* ssid = "4534";
-const char* password = "5455";
+const char* ssid = "hehe";
+const char* password = "vn30041975";
 const char* ws_host = "192.168.10.162";  // your websocket host
 
 // =================== I2C Config ===================
@@ -37,8 +37,8 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 #define BUFFER_BLOCKS 8
 
 // =================== Globals ===================
-I2SStream i2sMic(I2S_NUM_0);
-I2SStream i2sSpk(I2S_NUM_1);
+I2SStream i2sMic;
+I2SStream i2sSpk;
 
 
 WebSocketsClient webSocket;
@@ -84,13 +84,23 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
       }
       break;
     case WStype_BIN:
-      if (playbackState == IDLE) {
-        playbackState = PLAYING;
-        oledMessage("Playing...");
-        Serial.println("Playback started.");
-      }
-      if (playbackState == PLAYING) {
-        i2sSpk.write(payload, length);
+      Serial.println("Receiving binary data.");
+      if (length > 0) { // Only process if there is data
+        if (playbackState == IDLE) {
+          playbackState = PLAYING;
+          oledMessage("Playing...");
+          Serial.println("Playback started.");
+        }
+        if (playbackState == PLAYING) {
+          Serial.printf("[WSc] WS BIN: received %d bytes. Space available for write: %d\n", length, i2sSpk.availableForWrite());
+          unsigned long start_time = millis();
+          size_t bytes_written = i2sSpk.write(payload, length);
+          unsigned long duration = millis() - start_time;
+          Serial.printf("[WSc] WS BIN: wrote %d bytes in %lu ms.\n", bytes_written, duration);
+          if (bytes_written != length) {
+            Serial.println(">>> I2S write underrun <<<");
+          }
+        }
       }
       break;
     case WStype_ERROR:
@@ -128,6 +138,7 @@ void setup() {
 
   // ---- I2S Mic ----
   auto micCfg = i2sMic.defaultConfig(RX_MODE);
+  micCfg.port_no = 0;
   micCfg.sample_rate = SAMPLE_RATE;
   micCfg.bits_per_sample = 16;
   micCfg.channels = 1;
@@ -138,12 +149,15 @@ void setup() {
 
   // ---- I2S Speaker ----
   auto spkCfg = i2sSpk.defaultConfig(TX_MODE);
+  spkCfg.port_no = 0;
   spkCfg.sample_rate = SAMPLE_RATE;
   spkCfg.bits_per_sample = 16;
   spkCfg.channels = 1;
   spkCfg.pin_bck = SPK_BCLK;
   spkCfg.pin_ws = SPK_LRCLK;
   spkCfg.pin_data = SPK_DIN;
+  spkCfg.buffer_size = BLOCK_SIZE;
+  spkCfg.buffer_count = BUFFER_BLOCKS;
   i2sSpk.begin(spkCfg);
 
   // ---- WebSocket ----
@@ -160,7 +174,13 @@ void setup() {
 
 // =================== Main Loop ===================
 void loop() {
+  static unsigned long last_heap_check = 0;
   webSocket.loop();
+
+  if (millis() - last_heap_check > 2000) {
+    Serial.printf("Free Heap: %d\n", ESP.getFreeHeap());
+    last_heap_check = millis();
+  }
 
   // Recording logic is disabled during playback
   if (playbackState == IDLE) {

@@ -20,7 +20,7 @@ from agents.voice import AudioInput
 # from .db import SessionLocal, Conversation
 # from .schemas import AudioUploadResponse, ChatHistoryResponse, ChatHistoryItem
 
-from .agent import run_agent
+from .agent import run_agent, dummy_agent
 
 
 from dotenv import load_dotenv
@@ -82,14 +82,14 @@ async def websocket_voice(ws: WebSocket):
 
                 full_pcm = np.concatenate(buffer)
                 # Save to .wav for debugging
-                sf.write("user_input.wav", full_pcm, 16000, subtype="PCM_16")
+                # sf.write("user_input.wav", full_pcm, 16000, subtype="PCM_16")
 
                 await ws.send_text(json.dumps({
                     "type": "text",
                     "data": "Received audio input, processing..."
                 }))
-
-                async for chunk in run_agent(full_pcm):
+                #async for chunk in run_agent(full_pcm):
+                async for chunk in dummy_agent("sample.wav"):
                     await ws.send_bytes(chunk)
 
                 await ws.send_text(json.dumps({

@@ -14,3 +14,4 @@ esp32/src/config.h
 
 .pio
 .vscode
+*.wav
