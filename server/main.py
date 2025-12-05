@@ -31,6 +31,9 @@ app = FastAPI()
 LOGGING_LEVEL = os.getenv('LOGGING_LEVEL', 'INFO')
 logging.basicConfig(level=LOGGING_LEVEL)
 
+VOLUME_BOOST_FACTOR = 2.0  # Adjust this factor to increase/decrease volume
+
+
 # Initialize agent and websocket manager
 # agent = VoiceAssistantAgent()
 
@@ -82,13 +85,13 @@ async def websocket_voice(ws: WebSocket):
 
                 full_pcm = np.concatenate(buffer)
                 # Save to .wav for debugging
-                # sf.write("user_input.wav", full_pcm, 16000, subtype="PCM_16")
-
+                sf.write("user_input.wav", full_pcm, 16000, subtype="PCM_16")
+ 
                 await ws.send_text(json.dumps({
                     "type": "text",
                     "data": "Received audio input, processing..."
                 }))
-                #async for chunk in run_agent(full_pcm):
+                # async for chunk in run_agent(full_pcm):
                 async for chunk in dummy_agent("sample.wav"):
                     await ws.send_bytes(chunk)
 
@@ -116,6 +119,11 @@ async def websocket_voice(ws: WebSocket):
                     # Not divisible by 4, so must be int16.
                     pcm_int16 = np.frombuffer(msg, dtype=np.int16)
                     pcm = pcm_int16.astype(np.float32) / 32768.0
+                
+                # Boost volume and clip to prevent distortion
+                pcm = pcm * VOLUME_BOOST_FACTOR
+                np.clip(pcm, -1.0, 1.0, out=pcm)
+
                 buffer.append(pcm)
 
     except WebSocketDisconnect:

@@ -78,7 +78,7 @@ async def run_agent(audio_data:bytes):
             audio_24k = event.data
             num_samples_16k = int(len(audio_24k) * 16000 / 24000)
             audio_16k = signal.resample(audio_24k, num_samples_16k)
-            pcm_bytes = audio_16k.astype(np.int16).tobytes()
+            pcm_bytes = (audio_16k * 32767).astype(np.int16).tobytes()
             yield pcm_bytes
             # player.write(event.data)
 

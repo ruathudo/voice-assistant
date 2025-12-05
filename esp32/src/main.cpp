@@ -27,7 +27,7 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 #define MIC_BCLK  40
 #define MIC_LRCLK 41
 #define MIC_DOUT  42
-
+ 
 #define SPK_BCLK  19
 #define SPK_LRCLK 20
 #define SPK_DIN   21
@@ -37,13 +37,14 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 #define BUFFER_BLOCKS 8
 
 // =================== Globals ===================
-I2SStream i2sMic;
-I2SStream i2sSpk;
+// I2SStream i2sMic;
+// I2SStream i2sSpk;
+I2SStream i2s;
 
 
 WebSocketsClient webSocket;
 WebSocketOutput out(webSocket);
-StreamCopy copier(out, i2sMic); // copies mic to websocket
+StreamCopy copier(out, i2s); // copies mic to websocket
 
 // For playback
 enum PlaybackState { IDLE, PLAYING, FINISHING };
@@ -92,9 +93,9 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
           Serial.println("Playback started.");
         }
         if (playbackState == PLAYING) {
-          Serial.printf("[WSc] WS BIN: received %d bytes. Space available for write: %d\n", length, i2sSpk.availableForWrite());
+          Serial.printf("[WSc] WS BIN: received %d bytes. Space available for write: %d\n", length, i2s.availableForWrite());
           unsigned long start_time = millis();
-          size_t bytes_written = i2sSpk.write(payload, length);
+          size_t bytes_written = i2s.write(payload, length);
           unsigned long duration = millis() - start_time;
           Serial.printf("[WSc] WS BIN: wrote %d bytes in %lu ms.\n", bytes_written, duration);
           if (bytes_written != length) {
@@ -136,29 +137,41 @@ void setup() {
   Serial.println();
   oledMessage("WiFi Connected");
 
+  // ---- I2S Config ----
+  auto i2sCfg = i2s.defaultConfig(RXTX_MODE);
+  i2sCfg.pin_ws = MIC_LRCLK;
+  i2sCfg.pin_bck = MIC_BCLK;
+  i2sCfg.pin_data = SPK_DIN;
+  i2sCfg.pin_data_rx = MIC_DOUT;
+  i2sCfg.sample_rate = SAMPLE_RATE;
+  i2sCfg.channels = 1;
+  i2sCfg.bits_per_sample = 16;
+  i2sCfg.buffer_size = BLOCK_SIZE;
+  i2sCfg.buffer_count = BUFFER_BLOCKS;
+  i2s.begin(i2sCfg);
   // ---- I2S Mic ----
-  auto micCfg = i2sMic.defaultConfig(RX_MODE);
-  micCfg.port_no = 0;
-  micCfg.sample_rate = SAMPLE_RATE;
-  micCfg.bits_per_sample = 16;
-  micCfg.channels = 1;
-  micCfg.pin_bck = MIC_BCLK;
-  micCfg.pin_ws = MIC_LRCLK;
-  micCfg.pin_data = MIC_DOUT;
-  i2sMic.begin(micCfg);
+  // auto micCfg = i2sMic.defaultConfig(RX_MODE);
+  // micCfg.port_no = 0;
+  // micCfg.sample_rate = SAMPLE_RATE;
+  // micCfg.bits_per_sample = 16;
+  // micCfg.channels = 1;
+  // micCfg.pin_bck = MIC_BCLK;
+  // micCfg.pin_ws = MIC_LRCLK;
+  // micCfg.pin_data = MIC_DOUT;
+  // i2sMic.begin(micCfg);
 
   // ---- I2S Speaker ----
-  auto spkCfg = i2sSpk.defaultConfig(TX_MODE);
-  spkCfg.port_no = 0;
-  spkCfg.sample_rate = SAMPLE_RATE;
-  spkCfg.bits_per_sample = 16;
-  spkCfg.channels = 1;
-  spkCfg.pin_bck = SPK_BCLK;
-  spkCfg.pin_ws = SPK_LRCLK;
-  spkCfg.pin_data = SPK_DIN;
-  spkCfg.buffer_size = BLOCK_SIZE;
-  spkCfg.buffer_count = BUFFER_BLOCKS;
-  i2sSpk.begin(spkCfg);
+  // auto spkCfg = i2sSpk.defaultConfig(TX_MODE);
+  // spkCfg.port_no = 0;
+  // spkCfg.sample_rate = SAMPLE_RATE;
+  // spkCfg.bits_per_sample = 16;
+  // spkCfg.channels = 1;
+  // spkCfg.pin_bck = SPK_BCLK;
+  // spkCfg.pin_ws = SPK_LRCLK;
+  // spkCfg.pin_data = SPK_DIN;
+  // spkCfg.buffer_size = BLOCK_SIZE;
+  // spkCfg.buffer_count = BUFFER_BLOCKS;
+  // i2sSpk.begin(spkCfg);
 
   // ---- WebSocket ----
   webSocket.begin(ws_host, 8000, "/ws");
@@ -225,7 +238,7 @@ void loop() {
 
   // If playback is finishing, wait for i2s buffer to be empty then go to idle
   if (playbackState == FINISHING) {
-    i2sSpk.flush();
+    i2s.flush();
     playbackState = IDLE;
     oledMessage("Ready - Touch to Talk");
     Serial.println("Playback finished.");
