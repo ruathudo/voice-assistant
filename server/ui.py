@@ -14,16 +14,53 @@ import streamlit as st
 import sounddevice as sd
 import soundfile as sf
 import numpy as np
-
+# from audiorecorder import audiorecorder
 
 st.set_page_config(page_title="Voice Assistant", layout="centered")
 st.title("🎤 Voice Assistant")
 
+if "stop_event" not in st.session_state:
+    st.session_state.stop_event = None
+
 conversation_id = st.session_state.get("conversation_id", None)
 chat_history = st.session_state.get("chat_history", [])
 
+SAMPLE_RATE = 16000
+CHUNK_SIZE = 1024
+
+async def stream_audio(ws, stop_event):
+    queue = asyncio.Queue()
+    # loop = asyncio.get_event_loop()
+
+    def callback(indata, frames, time, status):
+        if status:
+            print(status)
+        if not stop_event.is_set():
+            # put chunk into async queue (non-blocking)
+            queue.put_nowait(indata.copy())
+
+    with sd.InputStream(samplerate=SAMPLE_RATE,
+                        channels=1,
+                        dtype="float32",
+                        blocksize=CHUNK_SIZE,
+                        callback=callback):
+        async def sender():
+            while not stop_event.is_set() or not queue.empty():
+                chunk = await queue.get()
+                await ws.send(chunk.astype(np.float32).tobytes())
+
+            await ws.send(b"__END__")
+        
+        # while not stop_event.is_set():
+        #     await asyncio.sleep(0.1)
+        # run sender until stop_event is set
+        await sender()
+    # await ws.send("_END_")  # signal end of stream
+
+
+
 async def voice_client(file=None):
-    uri = "ws://localhost:8000/ws/voice"
+    uri = "ws://localhost:8000/ws"
     async with websockets.connect(uri) as ws:
         if file:
             st.write("Uploading...!")
@@ -37,19 +74,18 @@ async def voice_client(file=None):
             st.write("🔴 Recording... Speak now!")
 
             # --- 1. Capture mic for 5 sec (example) ---
-            duration = 5
-            samplerate = 16000
-            recording = sd.rec(int(duration * samplerate), samplerate=samplerate, channels=1, dtype="float32")
-            sd.wait()
+            # duration = 5
+            # samplerate = 16000
+            # recording = sd.rec(int(duration * samplerate), samplerate=samplerate, channels=1, dtype="float32")
+            # sd.wait()
 
             # Send audio in chunks (simulate streaming)
-            chunk_size = 1024
-            for i in range(0, len(recording), chunk_size):
-                chunk = recording[i:i+chunk_size].tobytes()
-                await ws.send(chunk)
+            # chunk_size = 1024
+            # for i in range(0, len(recording), chunk_size):
+            #     chunk = recording[i:i+chunk_size].tobytes()
+            #     await ws.send(chunk)
+            st.write("Recording stopped.")
 
-        # Signal end of utterance
-        await ws.send(b"__END__")
 
         # Listen for server messages
         full_audio_chunks = []
@@ -66,10 +102,14 @@ async def voice_client(file=None):
                 if event["type"] == "text":
                     st.markdown(f"🤖 Assistant: {event['data']}")
                 elif event["type"] == "error":
-                    st.error(f"Error: {event['data']}")
+                    st.error(f"Error: {event['msg']}")
                 elif event["type"] == "end":
                     st.write("✅ Response complete.")
                     break
+
+        if full_audio_chunks:
+            full_pcm = np.concatenate(full_audio_chunks)
+            st.audio(full_pcm, sample_rate=24000)
         # audio_buffer = io.BytesIO()
         # async for msg in ws:
         #     st.write("Server:", msg)
@@ -117,8 +157,7 @@ async def voice_client(file=None):
 
         # stream_player.stop()
         # audio_buffer.seek(0)
-    full_pcm = np.concatenate(full_audio_chunks)
-    st.audio(full_pcm, sample_rate=24000)
+
 
 
 st.info("Upload a recored file to get the answer.")
@@ -153,9 +192,13 @@ if conversation_id:
 
 
 st.info("Press the button and speak to record your voice.")
-if st.button("Start Conversation"):
+if st.button("Start Recording"):
     asyncio.run(voice_client())
 
+
+if st.button("Stop Recording"):
+    if st.session_state.stop_event and not st.session_state.stop_event.is_set():
+        st.session_state.stop_event.set()
 # Audio playback (stub)
 # st.audio(b"", format="audio/wav")
 
