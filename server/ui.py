@@ -2,204 +2,180 @@
 """
 Streamlit UI for Voice Assistant
 """
-from math import e
-import os
-import io
-import json
-import base64
 import asyncio
-import requests
-import websockets
-import streamlit as st
-import sounddevice as sd
-import soundfile as sf
-import numpy as np
-# from audiorecorder import audiorecorder
+import json
+import queue
+from functools import partial
 
+import numpy as np
+import sounddevice as sd
+import streamlit as st
+import websockets
+
+# --- Page Config ---
 st.set_page_config(page_title="Voice Assistant", layout="centered")
 st.title("🎤 Voice Assistant")
 
-if "stop_event" not in st.session_state:
-    st.session_state.stop_event = None
-
-conversation_id = st.session_state.get("conversation_id", None)
-chat_history = st.session_state.get("chat_history", [])
-
+# --- Constants ---
 SAMPLE_RATE = 16000
 CHUNK_SIZE = 1024
+WEBSOCKET_URI = "ws://localhost:8000/ws"
 
-async def stream_audio(ws, stop_event):
-    queue = asyncio.Queue()
-    # loop = asyncio.get_event_loop()
+# --- Session State Initialization ---
+if "app_state" not in st.session_state:
+    st.session_state.app_state = "idle"  # idle, recording, processing, error
+if "audio_stream" not in st.session_state:
+    st.session_state.audio_stream = None
+if "audio_queue" not in st.session_state:
+    st.session_state.audio_queue = None
+if "audio_to_process" not in st.session_state:
+    st.session_state.audio_to_process = None
+if "server_messages" not in st.session_state:
+    st.session_state.server_messages = []
+if "playback_audio" not in st.session_state:
+    st.session_state.playback_audio = None
 
-    def callback(indata, frames, time, status):
-        if status:
-            print(status)
-        if not stop_event.is_set():
-            # put chunk into async queue (non-blocking)
-            queue.put_nowait(indata.copy())
 
-    with sd.InputStream(samplerate=SAMPLE_RATE,
-                        channels=1,
-                        dtype="float32",
-                        blocksize=CHUNK_SIZE,
-                        callback=callback):
-        async def sender():
-            while not stop_event.is_set() or not queue.empty():
-                chunk = await queue.get()
-                await ws.send(chunk.astype(np.float32).tobytes())
+# --- Audio Handling Functions ---
+def audio_callback(indata, frames, time, status, q):
+    """This is called (from a separate thread) for each audio block."""
+    if status:
+        print(f"Input stream status: {status}")
+    q.put(indata.copy())
 
+
+async def process_audio_and_interact(audio_data: np.ndarray):
+    """Connects to the WebSocket, sends audio, and handles server responses."""
+    try:
+        async with websockets.connect(WEBSOCKET_URI) as ws:
+            await ws.send(audio_data.astype(np.float32).tobytes())
             await ws.send(b"__END__")
-        
-        # while not stop_event.is_set():
-        #     await asyncio.sleep(0.1)
-        # run sender until stop_event is set
-        await sender()
-    # await ws.send("_END_")  # signal end of stream
+
+            received_audio_chunks = []
+            current_messages = []
+
+            async for msg in ws:
+                if isinstance(msg, bytes):
+                    chunk = np.frombuffer(msg, dtype=np.int16)
+                    received_audio_chunks.append(chunk)
+                else:
+                    try:
+                        event = json.loads(msg)
+                        msg_type = event.get("type")
+                        if msg_type == "text":
+                            current_messages.append(f"🤖 Assistant: {event['data']}")
+                        elif msg_type == "error":
+                            current_messages.append(f" A.I. Error: {event['msg']}")
+                        elif msg_type == "end":
+                            current_messages.append("✅ Response complete.")
+                            break
+                    except json.JSONDecodeError:
+                        current_messages.append(f"🤖 Raw: {msg}")
+
+            st.session_state.server_messages = current_messages
+            if received_audio_chunks:
+                st.session_state.playback_audio = np.concatenate(
+                    received_audio_chunks
+                )
+            st.session_state.app_state = "idle"
+
+    except (websockets.exceptions.ConnectionClosedError, ConnectionRefusedError):
+        st.session_state.app_state = "error"
+        st.session_state.server_messages = [
+            f"🔌 **Connection Error:** Could not connect to the server at `{WEBSOCKET_URI}`. Please ensure it's running."
+        ]
+    except Exception as e:
+        st.session_state.app_state = "error"
+        st.session_state.server_messages = [f"An unexpected error occurred: {e}"]
+    finally:
+        if "audio_to_process" in st.session_state:
+            del st.session_state["audio_to_process"]
+        st.rerun()
 
 
+# --- UI Components and Logic ---
 
-async def voice_client(file=None):
-    uri = "ws://localhost:8000/ws"
-    async with websockets.connect(uri) as ws:
-        if file:
-            st.write("Uploading...!")
-            data, samplerate = sf.read(file, dtype="float32")  # numpy array
-            chunk_size = int(0.1 * samplerate)  # 100ms chunks
-            for i in range(0, len(data), chunk_size):
-                chunk = data[i:i+chunk_size]
-                await ws.send(chunk.tobytes())  # send raw PCM
-                # await asyncio.sleep(0.1)       # pacing, simulating live stream
+if st.session_state.app_state == "idle":
+    st.info("Press 'Start Recording' and speak. Press 'Stop' when you're done.")
+    if st.button("Start Recording", type="primary"):
+        # Create a queue and store it in session state for the main thread.
+        q = queue.Queue()
+        st.session_state.audio_queue = q
+
+        # Use functools.partial to pass the queue to the callback function.
+        # This avoids accessing st.session_state from the callback thread.
+        callback_with_queue = partial(audio_callback, q=q)
+
+        try:
+            st.session_state.audio_stream = sd.InputStream(
+                samplerate=SAMPLE_RATE,
+                channels=1,
+                dtype="float32",
+                blocksize=CHUNK_SIZE,
+                callback=callback_with_queue,
+            )
+            st.session_state.audio_stream.start()
+            st.session_state.app_state = "recording"
+            st.rerun()
+        except Exception as e:
+            st.error(f"Failed to start recording: {e}")
+            st.session_state.app_state = "error"
+
+elif st.session_state.app_state == "recording":
+    st.warning("🔴 Recording... Press 'Stop' to process.")
+    if st.button("Stop"):
+        # Stop the stream and retrieve data
+        st.session_state.audio_stream.stop()
+        st.session_state.audio_stream.close()
+        audio_chunks = []
+        while not st.session_state.audio_queue.empty():
+            audio_chunks.append(st.session_state.audio_queue.get())
+
+        # Clean up stream resources
+        st.session_state.audio_stream = None
+        st.session_state.audio_queue = None
+
+        if audio_chunks:
+            # Store data and change state to 'processing' for the next run
+            st.session_state.audio_to_process = np.concatenate(audio_chunks)
+            st.session_state.app_state = "processing"
         else:
-            st.write("🔴 Recording... Speak now!")
+            st.warning("No audio was recorded.")
+            st.session_state.app_state = "idle"
+        st.rerun()
 
-            # --- 1. Capture mic for 5 sec (example) ---
-            # duration = 5
-            # samplerate = 16000
-            # recording = sd.rec(int(duration * samplerate), samplerate=samplerate, channels=1, dtype="float32")
-            # sd.wait()
-
-            # Send audio in chunks (simulate streaming)
-            # chunk_size = 1024
-            # for i in range(0, len(recording), chunk_size):
-            #     chunk = recording[i:i+chunk_size].tobytes()
-            #     await ws.send(chunk)
-            st.write("Recording stopped.")
-
-
-        # Listen for server messages
-        full_audio_chunks = []
-
-        async for msg in ws:
-            if isinstance(msg, bytes):
-                # handle audio chunk
-                chunk = np.frombuffer(msg, dtype=np.int16)
-                full_audio_chunks.append(chunk)
-
-                os.write(1, b"Received audio chunk\n")
-            else:
-                event = json.loads(msg)
-                if event["type"] == "text":
-                    st.markdown(f"🤖 Assistant: {event['data']}")
-                elif event["type"] == "error":
-                    st.error(f"Error: {event['msg']}")
-                elif event["type"] == "end":
-                    st.write("✅ Response complete.")
-                    break
-
-        if full_audio_chunks:
-            full_pcm = np.concatenate(full_audio_chunks)
-            st.audio(full_pcm, sample_rate=24000)
-        # audio_buffer = io.BytesIO()
-        # async for msg in ws:
-        #     st.write("Server:", msg)
-
-        # --- 2. Receive response events ---
-        # text_buffer = ""
-
-        # stream_player = sd.OutputStream(samplerate=16000, channels=1)
-        # stream_player.start()
-
-        # while True:
-        #     try:
-        #         message = await asyncio.wait_for(ws.recv(), timeout=5000)
-
-        #         if isinstance(message, bytes):
-        #             # handle audio chunk
-        #             os.write(1, b"Received audio chunk\n")
-        #             audio_buffer.write(message)
-        #         else:
-        #             event = json.loads(message)
-        #             if event["type"] == "text":
-        #                 st.markdown(f"🤖 Assistant: {event['data']}")
-        #     except asyncio.TimeoutError:
-        #         break  # no more messages
-
-        #     event = json.loads(msg)
-
-        #     if event["type"] == "transcript":
-        #         st.write(f"📝 User: {event['text']}")
-
-        #     elif event["type"] == "llm":
-        #         text_buffer += event["delta"]
-        #         st.markdown(f"🤖 Assistant: {text_buffer}")
-
-        #     elif event["type"] == "audio":
-        #         chunk = base64.b64decode(event["chunk"])
-        #         audio_buffer.write(chunk)
-        #         try:
-        #             data, samplerate = sf.read(io.BytesIO(chunk), dtype="float32")
-        #             if data.ndim > 1:
-        #                 data = np.mean(data, axis=1)
-        #             stream_player.write(data)
-        #         except RuntimeError:
-        #             pass
-
-        # stream_player.stop()
-        # audio_buffer.seek(0)
-
-
-
-st.info("Upload a recored file to get the answer.")
-uploaded_file = st.file_uploader("Upload your voice (.wav)", type=["wav"])
-
-if uploaded_file:
-    files = {"file": uploaded_file}
-    asyncio.run(voice_client(file=uploaded_file))
-    # response = requests.post("http://localhost:8000/api/audio", files=files, timeout=20)
-    # if response.ok:
-    #     conversation_id = response.json()["conversation_id"]
-    #     st.session_state["conversation_id"] = conversation_id
-    #     st.success(f"Conversation started: {conversation_id}")
-    # else:
-    #     st.error("Failed to start conversation.")
-
-if conversation_id:
-    st.subheader("Chat History")
-    history_resp = requests.get(f"http://localhost:8000/api/history/{conversation_id}", timeout=20)
-    if history_resp.ok:
-        chat_history = history_resp.json()["history"]
-        st.session_state["chat_history"] = chat_history
-        for item in chat_history:
-            st.markdown(f"**You:** {item['user_input']}")
-            st.markdown(f"**Assistant:** {item['agent_response']}")
+elif st.session_state.app_state == "processing":
+    st.info("⏳ Sending audio and waiting for response...")
+    audio_data = st.session_state.get("audio_to_process")
+    if audio_data is not None:
+        # This is a blocking call that handles the entire interaction
+        asyncio.run(process_audio_and_interact(audio_data))
     else:
-        st.error("Could not fetch chat history.")
+        st.warning("Processing state but no audio data found. Resetting.")
+        st.session_state.app_state = "idle"
+        st.rerun()
 
-    st.subheader("Live Response (WebSocket)")
-    if st.button("Connect to Stream"):
-        st.info("WebSocket streaming not implemented in this stub. See README for details.")
+elif st.session_state.app_state == "error":
+    if st.button("Try Again"):
+        st.session_state.app_state = "idle"
+        st.session_state.server_messages = []
+        st.session_state.playback_audio = None
+        st.rerun()
 
+# --- Display Area for Server Responses ---
 
-st.info("Press the button and speak to record your voice.")
-if st.button("Start Recording"):
-    asyncio.run(voice_client())
+# Display server text messages
+if st.session_state.server_messages:
+    st.markdown("---")
+    for msg in st.session_state.server_messages:
+        if "Error" in msg:
+            st.error(msg)
+        else:
+            st.markdown(msg)
 
+# Display and play back server audio response
+if st.session_state.playback_audio is not None:
+    st.audio(st.session_state.playback_audio, sample_rate=SAMPLE_RATE)
+    st.session_state.playback_audio = None
 
-if st.button("Stop Recording"):
-    if st.session_state.stop_event and not st.session_state.stop_event.is_set():
-        st.session_state.stop_event.set()
-# Audio playback (stub)
-# st.audio(b"", format="audio/wav")
-
-st.caption("Demo UI. For full features, implement audio recording and WebSocket streaming.")
+st.caption("v4 - Streamlit Voice Client (Thread-Safe)")
