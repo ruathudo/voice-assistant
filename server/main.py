@@ -91,13 +91,13 @@ async def websocket_voice(ws: WebSocket):
                     "type": "text",
                     "data": "Received audio input, processing..."
                 }))
-                # async for chunk in run_agent(full_pcm):
-                async for chunk in dummy_agent("sample.wav"):
+                async for chunk in run_agent(full_pcm):
+                # async for chunk in dummy_agent("sample.wav"):
                     await ws.send_bytes(chunk)
 
                 await ws.send_text(json.dumps({
                     "type": "end",
-                    "data": "Response complete."
+                    "data": "__END__"
                 }))
 
                 # Reset buffer for next utterance
