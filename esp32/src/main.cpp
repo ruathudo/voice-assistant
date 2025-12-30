@@ -9,7 +9,7 @@
 
 // =================== WiFi Config ===================
 const char *ssid = "Kien";
-const char *password = "***";
+const char *password = "0966809888";
 const char *ws_host = "192.168.1.13"; // your websocket host
 
 // =================== I2C Config ===================
@@ -43,6 +43,9 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 #define BLOCK_SIZE 1024
 #define BUFFER_BLOCKS 8
 
+// =================== Audio Volume ===================
+#define DEFAULT_VOLUME 2    // Default volume (0.0 to 2.0 is a safe range)
+
 // =================== Globals ===================
 // I2SStream i2sMic;
 // I2SStream i2sSpk;
@@ -52,6 +55,7 @@ WebSocketsClient webSocket;
 WebSocketOutput out(webSocket);
 StreamCopy copier(out, i2s); // copies mic to websocket
 
+auto i2sCfg = i2s.defaultConfig(RXTX_MODE);
 // For playback
 enum PlaybackState
 {
@@ -63,6 +67,7 @@ volatile PlaybackState playbackState = IDLE;
 
 volatile bool recording = false;
 volatile bool lastTouch = false;
+float current_volume = DEFAULT_VOLUME;
 
 // =================== OLED Functions ===================
 void oledMessage(const char *msg)
@@ -73,6 +78,29 @@ void oledMessage(const char *msg)
     display.setCursor(0, 28);
     display.println(msg);
     display.display();
+}
+
+// =================== Volume Control ===================
+void volumeUp() {
+    current_volume += 0.1;
+    if (current_volume > 2.0) {
+        current_volume = 2.0;
+    }
+    char msg[20];
+    sprintf(msg, "Volume: %.0f%%", current_volume * 100);
+    oledMessage(msg);
+    Serial.printf("Volume set to: %.2f\n", current_volume);
+}
+
+void volumeDown() {
+    current_volume -= 0.1;
+    if (current_volume < 0.0) {
+        current_volume = 0.0;
+    }
+    char msg[20];
+    sprintf(msg, "Volume: %.0f%%", current_volume * 100);
+    oledMessage(msg);
+    Serial.printf("Volume set to: %.2f\n", current_volume);
 }
 
 // =================== WebSocket Event ===================
@@ -142,14 +170,25 @@ void webSocketEvent(WStype_t type, uint8_t *payload, size_t length)
             }
             if (playbackState == PLAYING)
             {
+                // Use VolumeStream for a cleaner implementation
+                MemoryStream audio_chunk(payload, length);
+                VolumeStream volume_stream(audio_chunk);
+                auto vcfg = volume_stream.defaultConfig();
+                vcfg.copyFrom(i2sCfg);
+                vcfg.allow_boost = true; // allow volume > 1.0
+                volume_stream.begin(vcfg);
+                volume_stream.setVolume(current_volume);
+
+                StreamCopy data_copier(i2s, volume_stream);
+
                 Serial.printf("[WSc] WS BIN: received %d bytes. Space available for write: %d\n", length, i2s.availableForWrite());
                 unsigned long start_time = millis();
-                size_t bytes_written = i2s.write(payload, length);
+                size_t bytes_written = data_copier.copy();
                 unsigned long duration = millis() - start_time;
                 Serial.printf("[WSc] WS BIN: wrote %d bytes in %lu ms.\n", bytes_written, duration);
                 if (bytes_written != length)
                 {
-                    Serial.println(">>> I2S write underrun <<<");
+                    Serial.printf(">>> I2S write issue: expected %d, wrote %d <<<\n", length, bytes_written);
                 }
             }
         }
@@ -199,7 +238,6 @@ void setup()
     //   }
 
     // ---- I2S Config ----
-    auto i2sCfg = i2s.defaultConfig(RXTX_MODE);
     i2sCfg.pin_ws = I2S_LRCLK;
     i2sCfg.pin_bck = I2S_BCLK;
     i2sCfg.pin_data = I2S_DOUT;

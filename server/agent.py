@@ -3,6 +3,7 @@ Handling agent logic and workflow
 """
 import io
 import random
+import asyncio
 import numpy as np
 from scipy import signal
 import soundfile as sf
@@ -78,8 +79,14 @@ async def run_agent(audio_data:bytes):
             audio_24k = event.data
             num_samples_16k = int(len(audio_24k) * 16000 / 24000)
             audio_16k = signal.resample(audio_24k, num_samples_16k)
-            pcm_bytes = (audio_16k * 32767).astype(np.int16).tobytes()
-            yield pcm_bytes
+            pcm_bytes = (audio_16k).astype(np.int16).tobytes()
+            
+            # Stream in smaller chunks to avoid overwhelming the ESP32 client
+            chunk_size = 1024  # Bytes
+            for i in range(0, len(pcm_bytes), chunk_size):
+                yield pcm_bytes[i:i + chunk_size]
+                # Add a small delay to throttle the stream, similar to arduino-audio-tools examples
+                await asyncio.sleep(0.01)  # 10ms delay
             # player.write(event.data)
 
 
