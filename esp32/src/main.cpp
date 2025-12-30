@@ -53,9 +53,14 @@ I2SStream i2s;
 
 WebSocketsClient webSocket;
 WebSocketOutput out(webSocket);
-StreamCopy copier(out, i2s); // copies mic to websocket
+StreamCopy input_copier(out, i2s); // copies mic to websocket
 
-auto i2sCfg = i2s.defaultConfig(RXTX_MODE);
+// For playback
+MemoryStream audio_chunk;
+VolumeStream volume_stream(audio_chunk);
+StreamCopy output_copier(i2s, volume_stream);
+
+
 // For playback
 enum PlaybackState
 {
@@ -170,20 +175,12 @@ void webSocketEvent(WStype_t type, uint8_t *payload, size_t length)
             }
             if (playbackState == PLAYING)
             {
-                // Use VolumeStream for a cleaner implementation
-                MemoryStream audio_chunk(payload, length);
-                VolumeStream volume_stream(audio_chunk);
-                auto vcfg = volume_stream.defaultConfig();
-                vcfg.copyFrom(i2sCfg);
-                vcfg.allow_boost = true; // allow volume > 1.0
-                volume_stream.begin(vcfg);
+                audio_chunk.setValue(payload, length);
                 volume_stream.setVolume(current_volume);
-
-                StreamCopy data_copier(i2s, volume_stream);
 
                 Serial.printf("[WSc] WS BIN: received %d bytes. Space available for write: %d\n", length, i2s.availableForWrite());
                 unsigned long start_time = millis();
-                size_t bytes_written = data_copier.copy();
+                size_t bytes_written = output_copier.copy();
                 unsigned long duration = millis() - start_time;
                 Serial.printf("[WSc] WS BIN: wrote %d bytes in %lu ms.\n", bytes_written, duration);
                 if (bytes_written != length)
@@ -238,6 +235,7 @@ void setup()
     //   }
 
     // ---- I2S Config ----
+    auto i2sCfg = i2s.defaultConfig(RXTX_MODE);
     i2sCfg.pin_ws = I2S_LRCLK;
     i2sCfg.pin_bck = I2S_BCLK;
     i2sCfg.pin_data = I2S_DOUT;
@@ -248,6 +246,13 @@ void setup()
     i2sCfg.buffer_size = BLOCK_SIZE;
     i2sCfg.buffer_count = BUFFER_BLOCKS;
     i2s.begin(i2sCfg);
+
+    // ---- Playback Stream Config ----
+    auto vcfg = volume_stream.defaultConfig();
+    vcfg.copyFrom(i2sCfg);
+    vcfg.allow_boost = true; // allow volume > 1.0
+    volume_stream.begin(vcfg);
+    
     // ---- I2S Mic ----
     // auto micCfg = i2sMic.defaultConfig(RX_MODE);
     // micCfg.port_no = 0;
@@ -346,7 +351,7 @@ void loop()
     {
         // The I2S signal is very weak. Please double-check the microphone wiring.
         // (BCLK, LRCLK, DOUT, GND, VCC)
-        copier.copy();
+        input_copier.copy();
     }
 
     // If playback is finishing, wait for i2s buffer to be empty then go to idle
