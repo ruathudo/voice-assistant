@@ -44,7 +44,7 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 #define BUFFER_BLOCKS 8
 
 // =================== Audio Volume ===================
-#define DEFAULT_VOLUME 2    // Default volume (0.0 to 2.0 is a safe range)
+#define DEFAULT_VOLUME 1.0    // Default volume (0.0 to 2.0 is a safe range)
 
 // =================== Globals ===================
 // I2SStream i2sMic;
@@ -56,8 +56,8 @@ WebSocketOutput out(webSocket);
 StreamCopy input_copier(out, i2s); // copies mic to websocket
 
 // For playback
-MemoryStream audio_chunk;
-VolumeStream volume_stream(audio_chunk);
+RingBufferStream ring_buffer;
+VolumeStream volume_stream(ring_buffer);
 StreamCopy output_copier(i2s, volume_stream);
 
 
@@ -132,35 +132,27 @@ void webSocketEvent(WStype_t type, uint8_t *payload, size_t length)
             {
                 Serial.print(F("deserializeJson() failed: "));
                 Serial.println(error.f_str());
-                // Fallback to old __END__ check if it's not JSON
-                if (strcmp((char *)payload, "__END__") == 0)
+                break;
+            }
+
+            // JSON parsing successful
+            const char *type = doc["type"];
+            const char *data = doc["data"];
+
+            if (type && strcmp(type, "end") == 0)
+            {
+                if (playbackState == PLAYING)
                 {
-                    if (playbackState == PLAYING)
-                    {
-                        playbackState = FINISHING;
-                        Serial.println("Playback finishing (legacy __END__)...");
-                    }
+                    playbackState = FINISHING;
+                    ring_buffer.flush(); // Ensure all data is sent to I2S
+                    Serial.println("Playback finishing (JSON __END__)...");
                 }
             }
             else
             {
-                // JSON parsing successful
-                const char *type = doc["type"];
-                const char *data = doc["data"];
-
-                if (type && data && strcmp(type, "end") == 0 && strcmp(data, "__END__") == 0)
-                {
-                    if (playbackState == PLAYING)
-                    {
-                        playbackState = FINISHING;
-                        Serial.println("Playback finishing (JSON __END__)...");
-                    }
-                }
-                else
-                {
-                    Serial.println("Received JSON, but not an __END__ signal.");
-                }
+                Serial.printf("Received JSON: %s\n", data);
             }
+            
         }
         break;
     case WStype_BIN:
@@ -175,7 +167,7 @@ void webSocketEvent(WStype_t type, uint8_t *payload, size_t length)
             }
             if (playbackState == PLAYING)
             {
-                audio_chunk.setValue(payload, length);
+                ring_buffer.write(payload, length);
                 volume_stream.setVolume(current_volume);
 
                 Serial.printf("[WSc] WS BIN: received %d bytes. Space available for write: %d\n", length, i2s.availableForWrite());
