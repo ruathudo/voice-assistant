@@ -13,8 +13,8 @@ const char *password = "0966809888";
 const char *ws_host = "192.168.1.13"; // your websocket host
 
 // =================== I2C Config ===================
-#define SDA_PIN 42
-#define SCL_PIN 41
+#define SDA_PIN 6 //42
+#define SCL_PIN 5 //41
 
 // =================== Touch Config ===================
 #define TOUCH_PIN T1          // adjust if needed (T1-T14)
@@ -34,10 +34,10 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 // #define SPK_LRCLK 20
 // #define SPK_DIN   21
 
-#define I2S_LRCLK 19
-#define I2S_BCLK 20
-#define I2S_DOUT 21
-#define I2S_DIN 38
+#define I2S_LRCLK 8 // 19
+#define I2S_BCLK 7 //20
+#define I2S_DOUT 10 //21
+#define I2S_DIN 11 //38
 
 #define SAMPLE_RATE 16000
 #define BLOCK_SIZE 1024

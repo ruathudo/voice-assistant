@@ -117,6 +117,7 @@ async def dummy_agent(file_path: str, chunk_size: int = 1024):
         for i in range(0, len(pcm_data), chunk_size):
             chunk = pcm_data[i:i + chunk_size]
             yield chunk.tobytes()
+            await asyncio.sleep(0.01)  # 10ms delay
 
     except FileNotFoundError:
         print(f"Error: File not found at {file_path}")
